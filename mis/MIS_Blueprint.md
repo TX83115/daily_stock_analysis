@@ -2,6 +2,10 @@
 
 ---
 
+Version: v2 (2026-07-06). v1 principles are unchanged — nothing deleted, nothing modified. v2 adds: sentiment benchmark and regime triggers (Layer 1); sector verification mechanics (Layer 2); the Strategy Doctrine with two paths — 突破路径 and 龙头路径 — and the daily 盘中计划 artifact; acceptance, fee-threshold, and rule self-audit mechanisms (Layer 5); and the Not-Adopted Registry (Layer 6).
+
+版本：v2（2026-07-06）。v1 原则不删不改。v2 新增：情绪标杆与状态触发（Layer 1）、板块验证机制（Layer 2）、双路径战法总纲（突破路径/龙头路径）与每日"盘中计划"、验收标准/费用门槛/规则自审（Layer 5）、明确不采用清单（Layer 6）。
+
 ## Design Philosophy
 
 MIS exists to help the trader understand the market, focus on the highest-quality opportunities, execute consistently, and continuously improve through feedback.
@@ -265,6 +269,20 @@ They exist to prevent repeated historical mistakes.
 Decision Bias Warning in Layer 1 is scoped to market and theme-level history. Bias arising from the trader's own execution behaviour is intentionally out of scope here and belongs to Layer 5.
 
 Layer 1 的决策偏差警示仅针对市场与题材层面的历史行为。由交易者自身执行习惯产生的偏差，不在本层范围内，属于 Layer 5 的职责。
+
+##### Sentiment Benchmark & Regime Triggers
+
+The market's sentiment benchmark is tracked daily: the benchmark stock (the current highest consecutive-board stock, or the highest board-break-and-reclaim stock) and its state — holding, diverging, or fallen. The day the state flips to "fallen" is a cycle-switch warning: the Leader Path candidate pool is re-evaluated as a whole, and every open position answers the nightly Two Questions that same evening.
+
+情绪标杆股每日跟踪：sentiment_daily 增加两个字段——benchmark_stock（当前市场情绪标杆＝最高连板股或断板反包高度股）、benchmark_state（三态：顶住/分歧/倒下）。状态翻为"倒下"当日即为周期切换预警：龙头路径候选池整体重估，全部持仓当晚做涨停/跌停二问。
+
+Broad-rally rotation: when daily advancers exceed 3000, the system flags holdings whose role is Follower or Noise for next-day strength-selling, while Leader and Core Leader roles are kept. On broad-rally days followers rise together with leaders; the next day the strong stay strong and the weak are eliminated.
+
+普涨日去弱换强：触发条件＝当日上涨家数>3000。触发时系统提示：持仓中角色为"跟风/杂毛"的标的标记次日高抛，龙头/中军角色保留。依据：普涨日跟风与龙头齐涨，次日强者恒强、弱者淘汰。
+
+Climax-day caution: when a day shows batch limit-ups with strong auctions (climax-day signature), the next morning report must output one line: "Yesterday was a climax day; divergence is likely today — delay action to the afternoon or trade only the strongest front row." Advisory in nature, not a prohibition.
+
+高潮日次日谨慎开关：当日出现批量涨停+竞价亮眼（高潮日特征）时，次日晨报强制输出一行："昨日为高潮日，今日大概率分化，出手延后至午后或只做最强前排。"提示性质，非禁令。
 
 #### Outputs
 
@@ -554,6 +572,46 @@ When Layer 2 observes breadth information — for example, most sectors losing c
 
 当 Layer 2 观察到广度信息——例如多数板块同时资金流出、只有少数避险类板块资金流入——这个广度本身就应该反过来作为证据输入给 Layer 1，帮助判断市场是否已进入衰退或冰点阶段。不是 Layer 1 先判断完阶段、Layer 2 再被动跟随做或不做分析，两者互相提供输入。
 
+##### Mainline Multi-Period Filter
+
+A sector qualifies as a true mainline only when it ranks near the top of sector gains over three periods simultaneously — 3-day, 5-day, and 10-day. This separates real mainlines from one-day sentiment pulses.
+
+主线多周期过滤：以3日/5日/10日板块涨幅排名，三个周期同时进入前列才认定为"真主线"，用于区分主线与一日游情绪脉冲。
+
+##### Dragon-Tiger Verification
+
+The Dragon-Tiger List is the core of the verification layer: it is official exchange disclosure with no methodology dispute, while "main capital" style indicators are private estimates with inconsistent definitions. When sector capital-flow judgments conflict with Dragon-Tiger direction, the Dragon-Tiger List prevails.
+
+龙虎榜为验证层核心：龙虎榜是交易所官方披露数据，无口径争议；主力资金类指标为私人估算，口径不一。板块资金判断与龙虎榜方向冲突时，以龙虎榜为准。
+
+##### Linkage Test
+
+Whenever a stock is marked as a Leader, the same-day sector limit-up count and the average gain of follower stocks are recorded alongside. Verdicts: leader rises and followers respond = true leader; leader seals limit-up but cannot move its followers = end-of-move signal; a single stock rising alone = independent outlier, not handled by leader logic.
+
+联动测试（龙头真伪的客观验证）：凡标记某票为"龙头"，必须同时记录当日板块内涨停数与跟风股平均涨幅。判定：龙头涨且跟风响应＝真龙头；龙头涨停但带不动跟风＝行情尾声信号；仅一只独涨＝独立妖股，不按龙头逻辑处理。
+
+##### Benchmark Crash Rule
+
+When a theme's leader or benchmark falls by limit-down or near it in a single day, every holding under that theme — including Core Leaders and Catch-ups — enters "next-day auction reassessment", regardless of each stock's own chart. A leader may go sideways, but it must not crash: a crashing leader destroys the money-making effect of the entire theme.
+
+标杆暴跌＝题材级退出：某题材的龙头/标杆单日跌停或近跌停时，该题材下全部持仓（含中军、补涨）进入"次日竞价重估"状态，不论个股自身走势。依据：龙头可以横盘但不能暴跌，龙头暴跌摧毁整个题材的赚钱效应。
+
+##### Catch-up Leader Trigger
+
+Trigger: the total leader reaches the 8–10 board zone and shows board-break, special-suspension, or topping signs. On trigger, output the same-theme candidate list, ranked head-to-head by the next-day second-board auction three factors (auction height / auction volume / speed to limit). The expected height of a catch-up leader is 60–80% of the old leader, written directly into the expected-space field.
+
+补涨龙触发器：触发条件＝总龙头到达8-10板区域且出现断板/特停/见顶迹象。触发时输出同题材候选清单，按次日二板竞价三要素（竞价高度/竞价量/上板速度）PK排序；补涨龙预期高度＝老龙的6-8成，直接写入预期空间字段。
+
+##### Dynamic Sector Attribution
+
+A sector is not a static attribute of a stock; it is the reason the market prices it today. Attribution is determined three ways: (1) see who moves with it — the common label of the stocks that move at the same moment is its sector today; (2) the leader defines the boundary — a sector is defined by its leader and core leaders, not by a concept name (broad mother-themes such as "AI" must be split into sub-branches, each with its own leader); (3) an attribution switch is information, not noise — the switch day is a reassessment trigger.
+
+板块动态归属规则：板块不是股票的静态属性，是市场当日给它定价的理由。判定方法：①看谁带它涨——异动时刻同步异动的那批票的公共标签才是它今日的板块；②用龙头定边界——板块由其龙头+中军定义，不由概念名定义（"AI"等大母题须拆到子分支，每个子分支各有龙头）；③归属切换＝信息而非噪音——切换日为重新评估触发点。
+
+In practice: the Focus List and every Layer 2 stock-level output carry a "today's driving logic" field plus an attribution-change flag; external classifications (consecutive-board ladders and the like) serve only as an index — the verdict comes from our own Linkage Test. Fuzzy attribution on a theme's first limit-up-wave day is normal (it converges after one or two days of fermentation), which matches the existing rhythm of observe on day one, watch turnover boards on day two, act on day three — the window you cannot read is precisely the window you do not trade.
+
+落地：聚焦清单及 Layer 2 输出每只票时附一行"当日驱动逻辑"字段+归属变化标记；外部分类（连板天梯等）仅作索引，判定以自家联动测试为准。首日涨停潮的题材归属模糊属正常（发酵1-2日后收敛），与"首日只观察、第2日看换手连板、第3日出手"的既有节奏一致——看不懂的窗口本来就是不出手的窗口。
+
 ##### Executability Assessment
 
 A good opportunity is not necessarily executable.
@@ -693,6 +751,10 @@ Signals are weighted rather than treated equally. The current weighting is appro
 Strategy Profile changes only through deliberate revision, never through intraday emotion.
 
 策略画像只能通过审慎的修订而改变，绝不允许被盘中情绪改变。
+
+As of v2, the Strategy Profile is formalised as the dual-path Strategy Doctrine: the 突破路径 (structural accumulation, daily-timeframe weak-to-strong) and the 龙头路径 (overnight-timeframe weak-to-strong). The full doctrine, including finalised exit rules, is defined in the Strategy Doctrine section.
+
+自 v2 起，策略画像正式定稿为双路径战法总纲：突破路径（结构低吸，日线级弱转强）与龙头路径（隔日级弱转强）。完整战法（含退出规则定稿）见"战法总纲"章节。
 
 ##### Elimination Engine
 
@@ -926,6 +988,10 @@ There is no separate profit-target concept. Specific stop-loss and sell-point me
 
 不设独立的止盈概念。具体的止损与卖点方法在策略画像中定义，不写入本蓝图。
 
+As of v2, these methods are finalised per path in the Strategy Doctrine: Breakout Path = structure break plus the nightly Two Questions; Leader Path = first open weaker than the prior day exits at the auction, with a hard 10:00 fallback.
+
+自 v2 起，具体方法已按路径在"战法总纲"中定稿：突破路径＝结构破位＋每晚二问；龙头路径＝首次开盘弱于前日即竞价出局＋10:00兜底清仓。
+
 Exits are executed when their conditions occur, not when the trader feels ready. Hope is not an exit strategy, and neither is fear.
 
 退出在条件发生时执行，而不是在交易者"感觉可以了"的时候执行。希望不是退出策略，恐惧也不是。
@@ -1013,6 +1079,114 @@ The measure of a successful trading day is not profit. It is that every action t
 Layer 4 converts pre-committed conditions into disciplined action. It does not evaluate whether the system itself is working — that is the responsibility of Layer 5.
 
 Layer 4 将事先承诺的条件转化为有纪律的行动。它不评估系统本身是否有效——那是 Layer 5 的职责。
+
+### Strategy Doctrine — 战法总纲（v2）
+
+#### Core Logic
+
+One sentence: buy only the weak-to-strong switching point — never the absolutely weak (catching a falling knife on the way down), never the absolutely strong (chasing a consensus climax).
+
+核心逻辑一句话——只买"弱转强"的切换点，不买绝对的弱（下跌途中接飞刀），不买绝对的强（一致性高潮追高）。
+
+The accumulation school and the leader school are not opposed. Accumulation buys "price weak but structure already turned strong" — a daily-timeframe switch. Leader weak-to-strong buys "yesterday's sentiment weak but today's capital proves it strong" — an overnight-timeframe switch. One logic, two time scales. The doctrine is therefore finalised as two paths.
+
+低吸与龙头两派并不对立：低吸买的是"价格弱但结构已转强"（日线级切换），龙头弱转强买的是"昨日情绪弱但今日资金证明转强"（隔日级切换）——同一逻辑的两个时间尺度。据此战法定稿为双路径。
+
+#### 突破路径 — Breakout Path（结构低吸，日线级弱转强）
+
+Candidates come from the mild-volume breakout screener (long-term structure + first volume expansion + first breakout + sector priority), with the sector required to be in Resonance state. Holding period: several days to weeks. Exit: structure break, or the nightly Two Questions trigger.
+
+候选来自Kimi温和放量突破筛选器（长期结构+首次放量+首次突破+板块优先），要求板块处于共振状态；持有数天至数周；退出＝结构破位或每晚二问触发。
+
+#### 龙头路径 — Leader Path（龙头弱转强，隔日级）
+
+Candidates: front-row stocks of sectors that weakened yesterday (poor boards / broken boards / board breaks). The buy point is the auction window. Three factors — missing any one means no buy:
+
+候选来自昨日走弱（烂板/炸板/断板）的板块前排；买点在竞价窗口，三要素缺一不买：
+
+- Auction volume ≥ 7% of the prior day's total lots; 5–7% is borderline and needs the other factors to compensate; below 5%, abandon.（①竞价量≥前日总手7%，5-7%及格需其他要素补强，<5%放弃）
+
+- The opening price falls inside the "beyond-expectation zone" written down and fixed the night before. Beyond-expectation is a relative concept: relative to same-tier competitors, and relative to the stock's own degree of weakness yesterday.（②开盘价落入前夜写死的"超预期区间"；超预期是相对概念：相对同身位竞争者、相对自己昨日走弱程度）
+
+- The auction tape shows absorption that does not retreat.（③竞价分时承接不败退）
+
+Holding rule: stronger day by day. The first open weaker than the prior day exits at the auction; if the position cannot prove itself by 10:00 the next day, clear it — the hard fallback.
+
+持有规则＝一天比一天强，首次开盘弱于前日即竞价出局，次日10:00前不能证明自己即清仓（兜底）。
+
+#### Mechanism & Failure Conditions
+
+Why weak-to-strong works: yesterday's weakness lowers expectations and creates an expectation gap; strength inside weakness is the most genuine strength — no free riders, only active capital; yesterday's divergence completed the turnover, leaving a vacuum of selling pressure; confirmation triggers a buy-back positive feedback loop.
+
+弱转强机制依据：昨日走弱压低预期形成预期差；弱势中的强势是最真实的强势（无顺风车，只有主动资金）；昨日分歧完成换手、抛压真空；确认后引发回补正反馈。
+
+Failure conditions: no beyond-expectation at the auction (the expectation gap does not exist), or the switch occurs during a decline phase — a strong repair in an ebbing market is a danger signal, not an ignition signal.
+
+失效条件：竞价无超预期（预期差不存在），或转强发生在退潮期（退潮期的强修复是危险信号而非启动信号）。
+
+#### Environment Gate
+
+The Leader Path opens only during the repair, fermentation, and acceleration stages of the sentiment cycle. It is fully closed during decline and freezing stages. No exceptions.
+
+环境闸门：龙头路径仅在情绪周期修复/发酵/加速阶段开启，退潮/冰点期整体关闭，无例外。
+
+#### Entry Windows
+
+Three windows fit the no-guaranteed-screen-watching constraint: (1) the 9:15–9:25 auction — currently the only window enabled; (2) the 14:45–15:00 tail session ("buy at the tail for expected next-day continuation") — to be re-enabled as a Leader-tail sub-mode after the validation period; (3) leader pullback to a structural level ("the second wave") — in essence Breakout-Path logic applied to a proven leader, handled under the Breakout Path process, with zones drawable the night before or conditional orders placed. During the validation period the Leader Path uses only the auction window to keep the sample clean; every newly enabled window is accounted for separately.
+
+上车窗口设计：适配"不保证盯盘"约束的窗口共三个——①竞价9:15-9:25（当前唯一启用）②尾盘14:45-15:00（"尾盘买预期次日持续"，验证期后作为龙头-尾盘子模式再启用）③龙头回调至结构位低吸（"第二波"，本质为突破路径逻辑用于已证明龙头，归入突破路径流程，可前夜画区间/挂条件单）。验证期龙头路径只用竞价窗口，保证样本纯净；每新增窗口独立分账。
+
+#### Fusion Rules
+
+Breakout feeds Leader: strong-structure sectors discovered by the Breakout Path pre-heat the Leader Path candidate pool. Leader feeds Breakout: once the Leader Path confirms a mainline, look back in the Breakout Path list for low-position structural stocks in the same sector (catch-up logic). Layer 2 sector judgment is the shared upstream of both paths.
+
+融合规则：突破喂龙头——突破路径发现的强结构板块为龙头路径候选池预热；龙头喂突破——龙头路径确认主线后，回头在突破路径名单中找同板块低位结构票（补涨逻辑）。Layer 2 板块判断为两路共享上游。
+
+#### Exit Rules — Finalised
+
+Breakout Path = structure break + nightly Two Questions. Leader Path = first weak open exits at the auction + the 10:00 fallback.
+
+退出规则定稿：突破路径＝结构破位＋每晚二问；龙头路径＝首次开盘转弱竞价出局＋10:00兜底。
+
+The nightly Two Questions are a mandatory field — one line per holding per day: "How likely is a limit-up tomorrow? How likely is a limit-down?" If a limit-up is implausible and a limit-down is plausible, exit at tomorrow's auction.
+
+每晚二问（强制字段，每持仓每日一行）："明天涨停的可能大不大？跌停的可能大不大？"——涨停无可能且跌停有可能→次日竞价走。
+
+#### Space Declaration
+
+Any buy above 30% of the position requires the log to state first "how many limit-ups of space remain"; if it cannot be stated, the size automatically drops below 30%. Paired with the five-tier win-rate framework: the win-rate tier governs probability, the space declaration governs payoff — only when both are answered does a large position qualify.
+
+空间前置声明：任何超过30%仓位的买入，日志必须先填"预期还有几个涨停空间"，填不出自动降至30%以下。与五档赢面框架配套：赢面档位管概率，空间声明管赔率，两者都答出才配大仓位。
+
+#### Missed-Leader Standard Action
+
+When a leader is confirmed but the buy point has been missed, chasing is forbidden. The standard action is one of two: wait for the next divergence point (re-queue through the weak-to-strong process), or look at the position-taking leader and same-sector low-position catch-up candidates. The log gains a "post-miss action" field (wait / position-take / rule-breaking chase); any "rule-breaking chase" entry is an immediate red light.
+
+错过龙头的标准替代动作：确认龙头但错过买点时禁止追高，标准动作二选一——等下一个分歧点（弱转强流程重新排队）或看卡位龙/同板块低位补涨候选。日志新增字段"错过后动作"（等待/卡位/违规追高），出现"违规追高"即红灯。
+
+#### Log Split
+
+Every trade is tagged Breakout Path or Leader Path, plus the actual auction three-factor readings (Leader Path), plus a judgment-correct-or-wrong field recorded independently of profit and loss.
+
+日志分账：每笔交易标注突破/龙头路径＋竞价三要素实际读数（龙头路径）＋判断对错（独立于赚亏）。
+
+#### Three Iron Laws
+
+1. Never add to a losing position to win it back.（亏损绝不加仓翻本）
+
+2. Never chase what was missed.（错过不追高）
+
+3. Never place an unplanned order — intraday impulses are recorded only, entered into the evening log, and re-queued through the process the next day.（计划外的单一律不下：盘中冲动只记录，晚间入日志，次日按流程排队）
+
+#### 盘中计划 — Daily Intraday Plan
+
+The daily operational artifact is named 盘中计划: one Notion page per day, titled "YYYY-MM-DD 盘中计划" for easy retrieval. It is generated after the nightly 20:00 pipeline run and evening homework — a fixed template instantiated with that day's content: Leader-Path auction three-factor thresholds pre-converted into concrete numbers (e.g. "auction volume ≥ 63,000 lots", not "≥ 7% of prior day"), Breakout-Path trigger price zones, holding open-price benchmarks, the nightly Two Questions column, the 10:00 check column, an intraday annotation area, and a post-close backfill area — all pre-filled on the page.
+
+每日操作件定名"盘中计划"，Notion 页面标题格式"YYYY-MM-DD 盘中计划"（便于检索）。每晚20:00管道运行+前夜作业后生成次日专属一页：模板固定、内容当日实例化——龙头路候选的竞价三要素阈值预先换算成具体数字（如"竞价量≥6.3万手"而非"≥前日7%"），突破路触发价格区间、持仓开盘对照基准、每晚二问栏、10:00检查栏、盘中批注区、收盘回填区全部预填在页上。
+
+During the session, this page is the only thing that needs to be open; it is informationally self-sufficient, with the Execution Handbook or this Doctrine consulted only when it is not. After the close, the checked and annotated page becomes the input draft of that day's journal — the 盘中计划 is checklist, intraday operating guide, and post-close feedback platform in one. Daily-invariant items (iron laws, exit rules) are printed as a fixed template block at the bottom of every page.
+
+盘中唯一需要打开的就是这一页，信息自足；不够时才引用《执行手册》或本战法总纲。收盘后已勾选+批注的页面即当日日志的输入底稿——盘中计划是 checklist、当日操作 guide、盘后回输平台三合一。每日不变项（铁律、卖出规则等）作为固定模板区印在每页末尾。
 
 ### Layer 5 — Feedback & Behaviour
 
@@ -1115,6 +1289,24 @@ Calibration follows three rules: every change is proposed with evidence, every c
 Feeling that the market has changed is a reason to open an investigation, never a reason to change a parameter.
 
 "感觉市场变了"是启动一项调查的理由，永远不是修改一个参数的理由。
+
+##### Path Acceptance Standard
+
+The Leader Path launches at a small, separately accounted size, with per-trade risk capped at an amount whose loss does not affect judgment. Only after a rolling 50–100 trades are net-of-fees positive, spanning at least two sentiment-cycle stages, may size be scaled up according to the five-tier win-rate framework. A paper-trading idle period of 2–4 weeks runs first, to verify that the process is sustainable before real small-size trading begins.
+
+龙头路径验收标准：小仓分账启动（单笔风险封顶于"亏损不影响判断"额度），滚动50-100笔费后为正、且横跨至少两种情绪周期阶段，方允许按五档赢面放大。空转期（纸上验证2-4周）先行，检验流程可持续性后再进小仓期。
+
+##### Fee Threshold Review
+
+At current turnover intensity, annualised trading fees are roughly 11–12% of capital — the hurdle that gross edge must clear first. Turnover intensity and fee share are checked in every monthly review; halving the trading frequency lowers the hurdle to roughly 6%.
+
+费用门槛入月度复盘：按当前换手强度，年化交易费用约为本金的11-12%，此为毛edge必须先跨越的门槛。每月检查换手强度与费用占比，频率减半则门槛降至约6%。
+
+##### Rule Self-Audit
+
+Every new rule is tested against the trader's own trade data after three months of operation; a rule that shows no local effectiveness is deleted. Rules themselves are subject to the Layer 5 four-quadrant assessment (process quality × outcome quality) — no exemption.
+
+规则自审机制：每条新规则运行三个月后，用自身交易数据检验本地有效性，无效即删。规则本身同样接受 Layer 5 四象限（过程质量×结果质量）评估，不豁免。
 
 ##### Feedback Routing
 
@@ -1255,6 +1447,12 @@ The Learned Knowledge Store holds everything the system has concluded from exper
 - Personal Bias Registry: the trader's recognised patterns（个人偏差登记册：交易者已被识别的行为模式）
 
 - Parameter History: every version of every tunable parameter, with its evidence and reasoning（参数历史：每一个可调参数的每一个版本，及其证据与理由）
+
+- Not-Adopted Registry: approaches deliberately rejected, with reasons, to prevent being repeatedly drawn back to them（明确不采用清单：刻意不采用的打法及原因，防止反复被吸引）
+
+The Not-Adopted Registry currently holds four entries: (1) intraday first-board scanning — requires live intraday execution, conflicting with the no-guaranteed-screen-watching constraint (the exit discipline of that school is absorbed; its offence is not adopted); (2) queueing for the third one-word board — extremely low frequency with high hidden queue-game risk, observation list only; (3) intraday T-trading — multiplies intraday decisions, conflicting with the known weakness of intraday emotional influence; (4) all-in single-stock concentration — conflicts with the five-tier win-rate framework, and the source corpus editors explicitly warn against it.
+
+明确不采用清单当前四项：①盘中扫首板打板——需盘中实时执行，与不保证盯盘的约束冲突（该派的退出纪律已吸收，进攻端不采用）；②排第三个一字板——频率极低且排单博弈隐性风险高，仅入观察名单；③日内做T——增加盘中决策次数，与"盘中易被情绪影响"弱项冲突；④满仓单吊——与五档赢面框架冲突，语料编者亦明确警告。
 
 ##### Memory Integrity
 
