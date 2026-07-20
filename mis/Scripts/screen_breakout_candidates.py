@@ -1,36 +1,36 @@
 """
 screen_breakout_candidates.py
-P0-1 Breakout (VCP-style) candidate screener, rewritten on Wudao data.
+P0-1 Breakout (VCP) candidate screener — 悟道 pre-filter + local-kline VCP.
 
-Replaces the logic previously embedded in mis_daily.py (a temporary script
-from the DSA split two weeks ago, running on akshare + Excel output).
-mis_daily.py itself is NOT touched or retired - it continues running via
-Kimi Work as a parallel reference source for cross-validation (dual-source
-check), not part of the main decision chain.
+合并说明（2026-07-20）：本脚本现为唯一的 VCP 筛选实现，已合并并取代
+~/hithink-scripts/daily_screen.py（原挂 Kimi Work 17:10 定时任务的本地 SQL 版）。
+daily_screen.py 只是"55日新高 + 近期涨幅不过热"的动量过滤，没有真正的收缩/量能/
+市值逻辑；本脚本保留其两点独有闸门（近期涨幅上限、688/北交所硬排除）并继续产出
+screen_result.json，其余以本脚本更完整的 VCP 逻辑为准。
 
 Pipeline:
-1. stock_screener: broad filter (market cap, volume ratio, above MA20,
-   no recent limit-up) -> candidate pool (up to 100)
-2. kline (batched, 20 codes/call): pull 100-day qfq daily bars for
-   each candidate
-3. VCP pattern check (reimplemented locally, not copied from mis_daily.py):
-   - find up to 3 most recent local peaks in a lookback window
-   - pullback % from each peak to subsequent low
-   - require pullbacks decreasing (contracting volatility)
-   - require no "second wave" breakout within the pattern window
-   - require today's high > prior lookback high (fresh breakout)
-4. Compute trigger_price_low (actual last pullback low, real price)
-   and trigger_price_high (today's close) - both real values from kline,
-   no approximation needed (this was the gap that blocked reusing
-   mis_daily.py's output directly).
-5. Cap at MAX_CANDIDATES, write into focus_list_daily with path='breakout'
+1. stock_screener: 宽口径粗筛（市值 50-300亿、量比、站上MA20、近N日无涨停）
+   -> 候选池（≤100）。市值口径当日若滞后，改用 valuation_snapshot 逐票取当日真实市值。
+2. 硬排除科创板(688/689)与北交所/老三板(8/4字头、920)（源自 daily_screen.py）。
+3. 本地 kline（v_daily_qfq）拉 qfq 日线做 VCP 形态识别：
+   - lookback 窗口内找最近 3 个局部高点，算每段回撤%
+   - 要求回撤依次收缩（波动收缩）
+   - 要求窗口内无"二波"放量突破
+   - 要求今日高点 > 前 lookback 高点（新突破）
+   - 近期涨幅不过热闸门（源自 daily_screen.py，阈值可调，见 params）
+4. 计算 trigger_price_low/high（真实价，非近似）。
+5. 取前 MAX_CANDIDATES，写入 focus_list_daily(path='breakout')，同时写 screen_result.json。
 
-Parameters are read from strategy_parameters table (param_set='vcp_breakout',
-is_active=true), NOT hardcoded, per L5 parameter versioning discipline.
+参数读自 strategy_parameters(param_set='vcp_breakout', is_active=true)，不写死，
+遵循 L5 参数版本化。近期涨幅闸门阈值默认 3日<10% / 5日<20% / 10日<30%，可在
+vcp_breakout 参数集里加 recent_gain_max_{3,5,10}d_pct 覆盖（见 analyze_vcp）。
 
-Type A script for now (manual run), will become Type B (Kimi Work) later.
+运行：`python screen_breakout_candidates.py [YYYY-MM-DD]`，不带日期则取 v_daily_qfq 最新日。
+需环境变量 WUDAO_API_KEY。
 """
-import os, json, requests, duckdb
+import os, json, requests, duckdb, sys
+
+SCREEN_RESULT_JSON = "/Users/tx/market-data/screen_result.json"
 
 KEY = os.environ.get("WUDAO_API_KEY")
 MCP_URL = "https://stock.quicktiny.cn/api/mcp"
@@ -61,6 +61,46 @@ def call_tool(name, arguments):
         raise RuntimeError(name + " call failed: " + str(result["error"]))
     sc = result.get("result", {}).get("structuredContent", {})
     return sc.get("data", sc)
+
+
+def _is_excluded_board(code):
+    """
+    硬排除科创板(688/689)与北交所/老三板(8字头/4字头/920)；创业板(300/301)保留。
+    源自 daily_screen.py（原 exchange!='BJ' + NOT ticker LIKE '688%'）。
+    本地 v_daily_qfq 对北交所覆盖不全，688 波动/涨跌幅规则也与主板/创业板不同。
+    """
+    c = str(code)
+    return c[:3] in ("688", "689", "920") or c[:1] in ("4", "8")
+
+
+def _to_thscode(code):
+    return code + (".SH" if str(code).startswith("6") else ".SZ")
+
+
+def write_screen_result_json(trade_date, candidates):
+    """
+    继续产出 /Users/tx/market-data/screen_result.json，保持对 Kimi Work 汇报/下游的
+    兼容。字段是旧 daily_screen.py schema（thscode/name/close/pct_1d/3d/5d/10d）的超集，
+    额外附带 VCP 字段；旧读取方按原字段名仍可用。
+    """
+    out = []
+    for c in candidates:
+        out.append({
+            "thscode": _to_thscode(c["code"]),
+            "name": c["name"],
+            "close": c["today_close"],
+            "pct_1d": c.get("pct_1d"),
+            "pct_3d": c.get("pct_3d"),
+            "pct_5d": c.get("pct_5d"),
+            "pct_10d": c.get("pct_10d"),
+            "pullbacks": c["pullbacks"],
+            "trigger_price_low": c["trigger_price_low"],
+            "trigger_price_high": c["trigger_price_high"],
+            "candidate_level": c["candidate_level"],
+        })
+    with open(SCREEN_RESULT_JSON, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"screen_result.json written: {len(out)} rows -> {SCREEN_RESULT_JSON}")
 
 
 def _cap_available(trade_date):
@@ -116,6 +156,19 @@ def _filter_by_valuation_snapshot(rows, trade_date, cap_min_yi, cap_max_yi, mark
     return kept
 
 
+def _cap_by_code_local(trade_date, market_cap_type):
+    """
+    P1 本地优先：从 valuation_daily（fetch_valuation_daily.py 每日快照）读市值。
+    返回 {code: cap_yi}；该日未入库则返回空 dict（调用方回退实时接口）。
+    """
+    col = "circ_mv_yi" if market_cap_type == "circ" else "total_mv_yi"
+    con = duckdb.connect(DB_PATH, read_only=True)
+    rows = con.execute(
+        f"SELECT code, {col} FROM valuation_daily WHERE trade_date = ?", [trade_date]).fetchall()
+    con.close()
+    return {r[0]: r[1] for r in rows if r[1] is not None}
+
+
 def run_screener(params, trade_date):
     # 技术/价格类过滤条件（不依赖市值因子）
     tech_args = {
@@ -137,6 +190,33 @@ def run_screener(params, trade_date):
         "marketCapMaxYi": params["market_cap_max_yi"],
     }
 
+    # P1 本地优先：valuation_daily 已有该日快照 -> 技术过滤后直接本地过市值。
+    # 本地缺市值的个别代码（快照瞬时缺失/新股）用 valuation_snapshot 小批量补齐，
+    # 不静默排除。
+    local_caps = _cap_by_code_local(trade_date, params["market_cap_type"])
+    if local_caps:
+        tech_rows = call_tool("stock_screener", tech_args).get("rows", [])
+        missing = [r["code"] for r in tech_rows if r["code"] not in local_caps]
+        if missing:
+            key = "circMv" if params["market_cap_type"] == "circ" else "totalMv"
+            for i in range(0, len(missing), 20):
+                data = call_tool("valuation_snapshot", {
+                    "codes": missing[i:i + 20], "date": trade_date,
+                    "detailLevel": "raw", "format": "json"})
+                for item in data.get("items", []):
+                    c = item.get("stock", {}).get("code")
+                    v = item.get(key)
+                    if c and v is not None:
+                        local_caps[c] = v / 1e4
+            print(f"市值过滤: 本地缺 {len(missing)} 只，已实时补查")
+        lo, hi = params["market_cap_min_yi"], params["market_cap_max_yi"]
+        filtered = [r for r in tech_rows
+                    if r["code"] in local_caps and lo <= local_caps[r["code"]] <= hi]
+        print(f"市值过滤: 本地 valuation_daily({trade_date})；"
+              f"技术候选={len(tech_rows)} -> 市值通过={len(filtered)}")
+        return filtered
+
+    # 本地无该日快照 -> 原有实时路径。
     # 正常路径：stock_screener 自身市值字段当日可用，单次调用带全部过滤条件。
     if _cap_available(trade_date):
         data = call_tool("stock_screener", {**tech_args, **cap_args})
@@ -266,8 +346,12 @@ def check_second_wave(bars, params):
 
 
 def analyze_vcp(code, name, bars, params):
+    """
+    返回 (candidate_dict | None, reason)。reason 标注"死在哪一步"，用于 screen() 汇总
+    每步淘汰数的漏斗诊断（源自 principle #2 对"死在哪一步"诊断的偏好）。
+    """
     if len(bars) < 60:
-        return None
+        return None, "too_short"
 
     lookback = params["vcp_lookback_days"]
     recent_20 = bars[-20:]
@@ -278,35 +362,55 @@ def analyze_vcp(code, name, bars, params):
     today_high = today.get("high")
     prior_high = max(b["high"] for b in bars[-(lookback + 1):-1])
     if today_high <= prior_high:
-        return None
+        return None, "not_fresh_high"
 
     today_close = today.get("close")
     prev_close = bars[-2].get("close")
     change_pct = (today_close - prev_close) / prev_close * 100
     if change_pct < params["close_pct_chg_min"]:
+        return None, "change_pct_low"
+
+    # 近期涨幅不过热闸门（源自 daily_screen.py）。阈值可调：默认 3日<10% / 5日<20% /
+    # 10日<30%，在 strategy_parameters 的 vcp_breakout 里加 recent_gain_max_{3,5,10}d_pct
+    # 即可覆盖并纳入版本管理。作用：滤掉已连续大涨、追高风险高的票。
+    def _pct_ago(n):
+        if len(bars) > n and bars[-1 - n].get("close"):
+            return (today_close - bars[-1 - n]["close"]) / bars[-1 - n]["close"] * 100
         return None
+    pct_3d, pct_5d, pct_10d = _pct_ago(3), _pct_ago(5), _pct_ago(10)
+    max_3d = params.get("recent_gain_max_3d_pct", 10.0)
+    max_5d = params.get("recent_gain_max_5d_pct", 20.0)
+    max_10d = params.get("recent_gain_max_10d_pct", 30.0)
+    if (pct_3d is not None and pct_3d >= max_3d) or \
+       (pct_5d is not None and pct_5d >= max_5d) or \
+       (pct_10d is not None and pct_10d >= max_10d):
+        return None, "overextended"
 
     peaks, is_decreasing = find_peaks_and_pullbacks(bars, lookback)
-    if not peaks or not is_decreasing:
-        return None
+    if not peaks:
+        return None, "peaks_lt_3"
     if params["vcp_pullback_must_decrease"] and not is_decreasing:
-        return None
+        return None, "not_decreasing"
     if peaks[0]["pullback_pct"] >= params["vcp_max_last_pullback_pct"]:
-        return None
+        return None, "last_pullback_too_big"
 
     if check_second_wave(bars, params):
-        return None
+        return None, "second_wave"
 
     return {
         "code": code, "name": name,
         "today_close": today_close,
         "change_pct": round(change_pct, 2),
+        "pct_1d": round(change_pct, 2),
+        "pct_3d": round(pct_3d, 2) if pct_3d is not None else None,
+        "pct_5d": round(pct_5d, 2) if pct_5d is not None else None,
+        "pct_10d": round(pct_10d, 2) if pct_10d is not None else None,
         "price_range_20d_pct": round(price_range_pct, 2),
         "pullbacks": [round(p["pullback_pct"], 2) for p in peaks],
         "trigger_price_low": round(peaks[0]["low_price"], 2),
         "trigger_price_high": round(today_close, 2),
         "candidate_level": "core" if peaks[0]["pullback_pct"] < 7 else "watch"
-    }
+    }, "ok"
 
 
 def compute_auction_threshold(con, code, trade_date):
@@ -328,26 +432,40 @@ def compute_auction_threshold(con, code, trade_date):
 def screen(trade_date):
     params = load_active_params("vcp_breakout")
     print("using vcp_breakout params version:", params["_version"])
+    print("recent-gain guard (可调): 3d<%s%% 5d<%s%% 10d<%s%%" % (
+        params.get("recent_gain_max_3d_pct", 10.0),
+        params.get("recent_gain_max_5d_pct", 20.0),
+        params.get("recent_gain_max_10d_pct", 30.0)))
 
     screener_rows = run_screener(params, trade_date)
     print("stock_screener candidates:", len(screener_rows))
 
-    codes = [r["code"] for r in screener_rows]
-    name_map = {r["code"]: r.get("name") for r in screener_rows}
+    # 硬排除科创板/北交所（源自 daily_screen.py）
+    kept_rows = [r for r in screener_rows if not _is_excluded_board(r["code"])]
+    if len(kept_rows) != len(screener_rows):
+        print("excluded 科创板/北交所:", len(screener_rows) - len(kept_rows),
+              "-> pool:", len(kept_rows))
+    codes = [r["code"] for r in kept_rows]
+    name_map = {r["code"]: r.get("name") for r in kept_rows}
 
     klines = batch_kline(codes, days=params["vcp_lookback_days"] + 60, max_rows=150)
     print("kline data retrieved for:", len(klines), "codes")
 
     candidates = []
+    reject_funnel = {}
     for code in codes:
         bars = klines.get(code)
         if not bars:
+            reject_funnel["no_kline"] = reject_funnel.get("no_kline", 0) + 1
             continue
-        result = analyze_vcp(code, name_map.get(code), bars, params)
+        result, reason = analyze_vcp(code, name_map.get(code), bars, params)
+        reject_funnel[reason] = reject_funnel.get(reason, 0) + 1
         if result:
             candidates.append(result)
 
     print("VCP pattern matches:", len(candidates))
+    # "死在哪一步"漏斗：每步淘汰数（含 ok=通过），用于判断 0 候选是真无票还是卡在某步
+    print("VCP reject funnel:", {k: reject_funnel[k] for k in sorted(reject_funnel)})
 
     candidates.sort(key=lambda x: x["pullbacks"][0])
     candidates = candidates[:params["max_candidates"]]
@@ -365,19 +483,28 @@ def screen(trade_date):
         )
     con.close()
 
+    # 兼容产出：同时写 screen_result.json（供 Kimi Work 汇报/下游读取）
+    write_screen_result_json(trade_date, candidates)
+
     return candidates
 
 
 if __name__ == "__main__":
-    # 交易日改为取本地 v_daily_qfq 的最新日期，而非 date.today()。
-    # 原因：VCP 分析和竞价阈值都依赖本地 kline，其"最后一根"就是 v_daily_qfq 最新日；
-    # 若用 date.today() 让 screener 过滤在更新的一天、而本地 kline 却停在更早一天，
+    # 交易日：优先命令行参数（如 2026-07-17），否则取本地 v_daily_qfq 最新日。
+    # 不用 date.today()：VCP 分析和竞价阈值都依赖本地 kline，其"最后一根"就是
+    # v_daily_qfq 最新日；若 screener 过滤在更新的一天、而本地 kline 停在更早一天，
     # 会造成 screener 日与 kline 日错位（且遇周末/节假日会取到无数据日）。
-    con = duckdb.connect(DB_PATH, read_only=True)
-    latest = con.execute("SELECT max(date) FROM v_daily_qfq").fetchone()[0]
-    con.close()
-    today = latest.isoformat()
-    print("Using trade_date (latest in v_daily_qfq):", today)
+    if not KEY:
+        raise SystemExit("WUDAO_API_KEY 未设置。本脚本依赖悟道 stock_screener/valuation_snapshot，"
+                         "请在环境变量或 ~/.env 中提供 WUDAO_API_KEY 后再运行。")
+    if len(sys.argv) > 1:
+        today = sys.argv[1]
+    else:
+        con = duckdb.connect(DB_PATH, read_only=True)
+        latest = con.execute("SELECT max(date) FROM v_daily_qfq").fetchone()[0]
+        con.close()
+        today = latest.isoformat()
+    print("Using trade_date:", today)
     result = screen(today)
     print()
     print("final candidates:", len(result))
