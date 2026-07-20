@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] MIS 日线扫描（mis/Scripts/mis_daily.py）Layer 1 全市场数据改用新浪为主源、东财降为回退，并忽略 macOS 系统级代理直连国内数据源，消除每次运行必现的东财 ProxyError/断连重试。
+- [新功能] 研报知识库脚本（mis/Scripts/broker_research/broker_research_v10.py）新增 IGNORE_DATES 永久忽略列表，已确认无需补跑的日期（如 2026-07-15）静默跳过、不再提醒。
 - [改进] 通知报告的分析结果摘要不再展开 AI 决策信号明细，完整信号保留在个股详情和单股报告中。
 - [新功能] #1595 P1.5 新增 Provider Cache Capability Registry，按 provider、api surface、gateway 和 verification status 建模 prompt cache 能力，未知 OpenAI-compatible route 默认 telemetry only。
 - [改进] #1595 P1 新增 prompt cache telemetry / analysis-path hints / diagnostics 最小配置，默认不改变 provider 请求 shape，并复用 LLM usage HMAC secret 做 domain-separated cache hint 派生。
