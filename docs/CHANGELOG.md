@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - [改进] MIS 突破筛选（mis/Scripts/screen_breakout_candidates.py）合并原本地 SQL 版 daily_screen.py 成为唯一 VCP 实现：新增 688/北交所硬排除、可调的近期涨幅过热闸门（默认 3日<10%/5日<20%/10日<30%，可经 strategy_parameters 覆盖）、逐步淘汰漏斗诊断输出，并兼容产出 screen_result.json。
-- [新功能] 新增 mis/Scripts/fetch_valuation_daily.py：悟道全市场估值快照落库 valuation_daily（市值单位亿元），双策略抓取（市值游标分页/valuation_snapshot 全扫）+ 幂等回填 + 合并式写入；突破筛选市值过滤改为本地优先、实时接口兜底，规避 stock_screener 市值联表滞后。
+- [改进] mis/Scripts/fetch_valuation_daily.py 由"每日全市场估值快照"改为"股本锚点+本地重构市值"（v2）：新增 shares_outstanding 股本表 + v_market_cap 视图（本地收盘价 x 股本，任意历史日零API成本查市值），股本一周滚动刷新一次（约40次调用/天，此前每日约1200次），冷启动可从已入库 valuation_daily 免费反推股本；突破筛选市值过滤优先用真实入库快照、次选重构视图、最后兜底悟道实时接口。
 - [修复] MIS 日线扫描（mis/Scripts/mis_daily.py）Layer 1 全市场数据改用新浪为主源、东财降为回退，并忽略 macOS 系统级代理直连国内数据源，消除每次运行必现的东财 ProxyError/断连重试。
 - [新功能] 研报知识库脚本（mis/Scripts/broker_research/broker_research_v10.py）新增 IGNORE_DATES 永久忽略列表，已确认无需补跑的日期（如 2026-07-15）静默跳过、不再提醒。
 - [改进] 通知报告的分析结果摘要不再展开 AI 决策信号明细，完整信号保留在个股详情和单股报告中。

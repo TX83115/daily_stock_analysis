@@ -158,15 +158,24 @@ def _filter_by_valuation_snapshot(rows, trade_date, cap_min_yi, cap_max_yi, mark
 
 def _cap_by_code_local(trade_date, market_cap_type):
     """
-    P1 本地优先：从 valuation_daily（fetch_valuation_daily.py 每日快照）读市值。
-    返回 {code: cap_yi}；该日未入库则返回空 dict（调用方回退实时接口）。
+    P1 本地优先（v2：股本锚点+本地重构，见 fetch_valuation_daily.py）。
+    优先用 valuation_daily 里该日的真实入库快照（如有，零近似误差）；
+    该日未入库则用 v_market_cap 视图（股本锚点 x 该日本地收盘价重构，
+    实测跨7个交易日 94.9%~98.4% 误差<0.1%）。两者都没有才返回空 dict
+    （调用方回退悟道实时接口）。
     """
     col = "circ_mv_yi" if market_cap_type == "circ" else "total_mv_yi"
     con = duckdb.connect(DB_PATH, read_only=True)
     rows = con.execute(
         f"SELECT code, {col} FROM valuation_daily WHERE trade_date = ?", [trade_date]).fetchall()
+    caps = {r[0]: r[1] for r in rows if r[1] is not None}
+    if not caps:
+        vcol = "circ_mv_yi" if market_cap_type == "circ" else "total_mv_yi"
+        rows = con.execute(
+            f"SELECT code, {vcol} FROM v_market_cap WHERE trade_date = ?", [trade_date]).fetchall()
+        caps = {r[0]: r[1] for r in rows if r[1] is not None}
     con.close()
-    return {r[0]: r[1] for r in rows if r[1] is not None}
+    return caps
 
 
 def run_screener(params, trade_date):

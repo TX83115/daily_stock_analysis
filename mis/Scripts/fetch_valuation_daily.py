@@ -1,31 +1,37 @@
 """
 fetch_valuation_daily.py
-悟道全市场估值快照 -> 本地 DuckDB valuation_daily（P1：本地优先架构的第一块）。
+本地优先市值架构 v2："股本锚点 + 本地重构"，取代 v1 的"每日全市场快照"。
 
-目的：把市值/估值数据落成本地 SQL，筛选/回测只读本地，不再受
-stock_screener 市值联表滞后影响；悟道拿不到时也有最近快照可用（Plan B）。
+v1(2026-07-20/21) 为何演进到 v2：
+市值 = 股本 x 收盘价。收盘价本地免费有(v_daily_qfq)；股本几乎不变——用 v1 已入库
+的两个真实交易日交叉验证(07-10 反推股本 -> 乘以07-20收盘价 -> 与07-20真实入库市值
+比对，跨7个交易日、零额外API调用)：98.4%的股票误差<0.1%，仅0.5%(真实送转/增发/
+回购)误差超5%。v1"每天全量扫一遍市值"因此是浪费——真正需要按天刷新的只是股本，
+而股本一周甚至更久刷一次都够用。
 
-抓取策略（按调用成本自动选择）：
-- 策略A（~19次/交易日）：stock_screener 按 totalMarketCapYi 降序分页扫全市场
-  （limit=300 上限，用"上一页最后一名的市值"作 marketCapMaxYi 游标下翻）。
-  仅在该交易日 stock_screener 市值联表已就绪时可用；联表滞后时首页即 0 行。
-- 策略B（~277次/交易日）：valuation_snapshot 逐票扫（20只/批），读 daily_basic，
-  对任意交易日都新鲜。策略A不可用或覆盖率<80%时自动回退。
+架构：
+- shares_outstanding 表：每只股票的总/流通股本(亿股)，滚动刷新，不是每日快照。
+- v_market_cap 视图：v_daily_qfq.close x shares_outstanding，任意(code,date)组合
+  零查询成本、零存储增长地算出市值。
+- valuation_daily 表(v1遗留，本文件不再写入)：已入库的真实交易日快照保留作地面
+  真值 —— 免费一次性拿来反推初始股本(见 --bootstrap)，之后不再新增。
 
-幂等：按 trade_date DELETE+INSERT（与 fetch_* 家族一致）。可续跑：回填时只处理
-valuation_daily 里缺失的交易日，新日期优先；--max-calls 配额护栏（悟道 2000次/天），
-预算用尽即停，下次运行自动续。
+滚动节奏：一周一轮(用户确认)，每天刷新 1/7 全市场(约790只 ≈ 40次调用/天，
+远低于悟道 50次/分钟+5000次/天配额)。刷新顺序=股本锚点最久未更新的排最前，
+保证每只票至多约7天刷新一次；从未刷新过的(新股/未覆盖)优先级最高。
 
 用法：
-  python fetch_valuation_daily.py                     # 只抓最新交易日
-  python fetch_valuation_daily.py --date 2026-07-15   # 抓指定交易日
-  python fetch_valuation_daily.py --backfill 250 --max-calls 1200
-      # 最近250个交易日中缺失的，新日期优先，最多用1200次调用后停止（可反复续跑）
+  python fetch_valuation_daily.py --bootstrap
+      # 冷启动：从已入库 valuation_daily 免费反推初始股本(零API调用)，只需跑一次
+  python fetch_valuation_daily.py
+      # 日常调度：刷新最该更新的一批(默认 --daily-quota 40 ≈ 一周滚动全市场一轮)
+  python fetch_valuation_daily.py --daily-quota 280
+      # 一次性把全市场刷新一遍(~277次调用)
 
-需环境变量 WUDAO_API_KEY。单位约定：市值列为【亿元】。
+需环境变量 WUDAO_API_KEY。单位：股本=亿股，市值=亿元。
 """
-import os, json, time, argparse, requests, duckdb
-from datetime import datetime
+import os, time, argparse, requests, duckdb
+from datetime import datetime, date
 
 KEY = os.environ.get("WUDAO_API_KEY")
 MCP_URL = "https://stock.quicktiny.cn/api/mcp"
@@ -35,22 +41,28 @@ DB_PATH = "/Users/tx/market-data/market.duckdb"
 MIN_INTERVAL_S = 1.25
 _last_call_at = [0.0]
 
-DDL = """
-CREATE TABLE IF NOT EXISTS valuation_daily (
-    trade_date    DATE,
-    code          VARCHAR,   -- 6位代码
-    name          VARCHAR,
-    close         DOUBLE,
-    total_mv_yi   DOUBLE,    -- 总市值，亿元
-    circ_mv_yi    DOUBLE,    -- 流通市值，亿元
-    pe_ttm        DOUBLE,
-    pb            DOUBLE,
-    turnover_rate DOUBLE,
-    volume_ratio  DOUBLE,
-    source        VARCHAR,   -- screener_page | valuation_snapshot
-    fetched_at    TIMESTAMP,
-    PRIMARY KEY (trade_date, code)
+DDL_SHARES = """
+CREATE TABLE IF NOT EXISTS shares_outstanding (
+    code             VARCHAR PRIMARY KEY,
+    name             VARCHAR,
+    total_shares_yi  DOUBLE,   -- 总股本，亿股
+    circ_shares_yi   DOUBLE,   -- 流通股本，亿股
+    as_of_date       DATE,     -- 该股本反推自哪个交易日的市值/收盘（锚点日）
+    fetched_at       TIMESTAMP
 )
+"""
+
+DDL_VIEW = """
+CREATE OR REPLACE VIEW v_market_cap AS
+SELECT
+    substr(k.thscode, 1, 6) AS code,
+    k.date AS trade_date,
+    k.close,
+    s.total_shares_yi * k.close AS total_mv_yi,
+    s.circ_shares_yi * k.close AS circ_mv_yi,
+    s.as_of_date AS shares_as_of_date
+FROM v_daily_qfq k
+JOIN shares_outstanding s ON s.code = substr(k.thscode, 1, 6)
 """
 
 
@@ -88,209 +100,133 @@ def call_tool(name, arguments, _retries=3):
         return sc.get("data", sc)
 
 
-def expected_codes(con, trade_date):
-    """该交易日本地有K线的股票（6位代码）。作为策略B的名单和覆盖率基准。"""
-    rows = con.execute(
-        "SELECT DISTINCT thscode FROM v_daily_qfq WHERE date = ?", [trade_date]).fetchall()
-    return [r[0].split(".")[0] for r in rows]
+def _table_exists(con, name):
+    return con.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = ?", [name]).fetchone() is not None
 
 
-def _row_from_screener(r):
-    return {
-        "code": r.get("code"), "name": r.get("name"), "close": r.get("close"),
-        "total_mv_yi": r.get("totalMarketCapYi"), "circ_mv_yi": r.get("circMarketCapYi"),
-        "pe_ttm": r.get("peTtm"), "pb": r.get("pb"),
-        "turnover_rate": r.get("turnoverRate"), "volume_ratio": r.get("volumeRatio"),
-    }
-
-
-def fetch_via_screener_page(trade_date, expected_count, budget):
+def bootstrap_from_valuation_daily(con):
     """
-    策略A：市值降序游标分页。返回 (rows_by_code | None, calls_used)。首页0行=联表滞后。
-    实测：无论 limit 传多少，raw 响应每页最多约75行（standard 50行），所以翻页终止
-    不能看 len(rows)<limit，只能看"游标不再下降/无新增/覆盖已够"。约74次/交易日。
+    冷启动：从 v1 已入库的 valuation_daily 真实快照，每只票取最新一条免费反推股本，
+    零API调用。valuation_daily 不存在（全新环境）时跳过，回退到实时刷新覆盖。
     """
-    rows_by_code, calls, max_yi, prev_last = {}, 0, None, None
-    while calls < budget:
-        args = {"date": trade_date, "marketCapMinYi": 0.1,
-                "sortBy": "totalMarketCapYi", "sortOrder": "desc",
-                "limit": 300, "excludeST": False,
-                "detailLevel": "raw", "format": "json"}
-        if max_yi is not None:
-            args["marketCapMaxYi"] = max_yi
-        data = call_tool("stock_screener", args)
-        calls += 1
-        rows = data.get("rows", [])
-        if not rows:
-            return (rows_by_code or None), calls   # 首页空=该日联表滞后
-        new = 0
-        for r in rows:
-            if r.get("code") and r["code"] not in rows_by_code:
-                rows_by_code[r["code"]] = _row_from_screener(r)
-                new += 1
-        last = rows[-1].get("totalMarketCapYi")
-        if (new == 0 or last is None
-                or (prev_last is not None and last >= prev_last)   # 游标停滞护栏
-                or len(rows_by_code) >= expected_count):
-            break
-        prev_last, max_yi = last, last
-    return rows_by_code, calls
-
-
-def _row_from_snapshot(item):
-    stock = item.get("stock", {})
-    tmv, cmv = item.get("totalMv"), item.get("circMv")
-    return {
-        "code": stock.get("code") or item.get("code"), "name": stock.get("name"),
-        "close": item.get("close"),
-        "total_mv_yi": tmv / 1e4 if tmv is not None else None,   # 万元 -> 亿元
-        "circ_mv_yi": cmv / 1e4 if cmv is not None else None,
-        "pe_ttm": item.get("peTtm"), "pb": item.get("pb"),
-        "turnover_rate": item.get("turnoverRate"), "volume_ratio": item.get("volumeRatio"),
-    }
-
-
-def fetch_via_snapshot(trade_date, codes, budget):
-    """
-    策略B：valuation_snapshot 20只/批全量扫。返回 (rows_by_code, calls_used, exhausted)。
-    实测持续高频扫全市场时，个别 item 会返回"只有股票身份、估值字段全 null"的瞬时缺失
-    （同一代码稍后单查正常），故对 null 市值的代码做一轮二次补查。
-    """
-    rows_by_code, calls = {}, 0
-
-    def _sweep(code_list):
-        nonlocal calls
-        for i in range(0, len(code_list), 20):
-            if calls >= budget:
-                return True
-            data = call_tool("valuation_snapshot", {
-                "codes": code_list[i:i + 20], "date": trade_date,
-                "detailLevel": "raw", "format": "json"})
-            calls += 1
-            for item in data.get("items", []):
-                row = _row_from_snapshot(item)
-                if row["code"]:
-                    rows_by_code[row["code"]] = row
-        return False
-
-    exhausted = _sweep(codes)
-    if not exhausted:
-        nulls = [c for c, r in rows_by_code.items() if r["total_mv_yi"] is None]
-        if nulls:
-            print(f"  [补查] {len(nulls)} 只市值为空，二次重查")
-            exhausted = _sweep(nulls)
-    return rows_by_code, calls, exhausted
-
-
-def write_date(con, trade_date, rows_by_code, source):
-    """
-    合并式写入：不能用"新数据无脑 DELETE+INSERT"——valuation_snapshot 高频扫时
-    个别 item 会瞬时返回 null 估值，若直接覆盖会把先前已入库的好数据打烂。
-    规则：新值非空则用新值；新值为空但库里已有非空旧值则保留旧值。
-    """
-    existing = {r[0]: r for r in con.execute(
-        "SELECT code, name, close, total_mv_yi, circ_mv_yi, pe_ttm, pb, turnover_rate, "
-        "volume_ratio, source FROM valuation_daily WHERE trade_date = ? "
-        "AND total_mv_yi IS NOT NULL", [trade_date]).fetchall()}
+    if not _table_exists(con, "valuation_daily"):
+        print("valuation_daily 表不存在，跳过免费引导，改用实时刷新覆盖全市场。")
+        return 0
+    rows = con.execute("""
+        SELECT code, name, total_mv_yi / close AS total_shares_yi,
+               circ_mv_yi / close AS circ_shares_yi, trade_date
+        FROM (
+            SELECT *, row_number() OVER (PARTITION BY code ORDER BY trade_date DESC) AS rn
+            FROM valuation_daily
+            WHERE close > 0 AND total_mv_yi IS NOT NULL AND total_mv_yi > 0
+        ) WHERE rn = 1
+    """).fetchall()
+    if not rows:
+        return 0
+    codes = [r[0] for r in rows]
     now = datetime.now()
-    out = []
-    merged_from_old = 0
-    for code, r in rows_by_code.items():
-        if r["total_mv_yi"] is None and code in existing:
-            e = existing[code]
-            out.append([trade_date, code, e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], e[9], now])
-            merged_from_old += 1
-        else:
-            out.append([trade_date, code, r["name"], r["close"], r["total_mv_yi"], r["circ_mv_yi"],
-                        r["pe_ttm"], r["pb"], r["turnover_rate"], r["volume_ratio"], source, now])
-    # 库里有而本次没抓到的代码也保留
-    for code, e in existing.items():
-        if code not in rows_by_code:
-            out.append([trade_date, code, e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], e[9], now])
-    con.execute("DELETE FROM valuation_daily WHERE trade_date = ?", [trade_date])
+    con.execute(f"DELETE FROM shares_outstanding WHERE code IN ({','.join(['?'] * len(codes))})", codes)
     con.executemany(
-        "INSERT INTO valuation_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", out)
-    nulls = sum(1 for row in out if row[4] is None)
-    if merged_from_old or nulls:
-        print(f"  [合并写入] 沿用旧值 {merged_from_old} 只；写入后市值仍为空 {nulls} 只")
+        "INSERT INTO shares_outstanding VALUES (?, ?, ?, ?, ?, ?)",
+        [[r[0], r[1], r[2], r[3], r[4], now] for r in rows])
+    return len(rows)
 
 
-def ingest_date(con, trade_date, budget):
-    """抓一个交易日。返回 (calls_used, status_str)。"""
-    expected = expected_codes(con, trade_date)
-    if not expected:
-        return 0, "skip(no local kline)"
+def pick_codes_to_refresh(con, quota):
+    """
+    选出本轮该刷新的代码：从未刷新过的(锚点缺失)优先，其余按锚点日期升序
+    (最久未刷新的优先)。quota 次调用 = quota*20 只代码。
+    """
+    limit = quota * 20
+    latest_kline_date = con.execute("SELECT max(date) FROM v_daily_qfq").fetchone()[0]
+    universe = [r[0] for r in con.execute(
+        "SELECT DISTINCT substr(thscode, 1, 6) FROM v_daily_qfq WHERE date = ?",
+        [latest_kline_date]).fetchall()]
+    known = {r[0]: r[1] for r in con.execute(
+        "SELECT code, as_of_date FROM shares_outstanding").fetchall()}
+    ordered = sorted(universe, key=lambda c: (known.get(c) is not None, known.get(c) or date.min))
+    return ordered[:limit]
 
-    rows, calls = fetch_via_screener_page(trade_date, len(expected), budget)
-    if rows and len(rows) >= 0.8 * len(expected):
-        # 游标分页在小市值尾部会因并列市值停滞，缺口用 valuation_snapshot 定向补齐
-        missing = [c for c in expected if c not in rows]
-        if missing and (budget - calls) >= (len(missing) + 19) // 20:
-            extra, calls_c, _ = fetch_via_snapshot(trade_date, missing, budget - calls)
-            calls += calls_c
-            rows.update(extra)
-            print(f"  [尾部补齐] 策略A缺 {len(missing)} 只，snapshot 补回 {len(extra)} 只")
-        write_date(con, trade_date, rows, "screener_page")
-        return calls, f"ok source=screener_page rows={len(rows)}/{len(expected)}"
-    print(f"  [诊断] 策略A覆盖 {len(rows) if rows else 0}/{len(expected)}，回退策略B")
 
-    # 策略A不可用/覆盖不足 -> 策略B（先检查预算够不够跑完，不够就整日跳过，避免白烧调用）
-    need_b = (len(expected) + 19) // 20
-    if budget - calls < need_b:
-        return calls, f"deferred(策略B需{need_b}次、预算余{budget - calls}，整日跳过下次续跑)"
-    rows_b, calls_b, _ = fetch_via_snapshot(trade_date, expected, budget - calls)
-    calls += calls_b
-    if not rows_b:
-        return calls, "fail(两种策略均无数据)"
-    write_date(con, trade_date, rows_b, "valuation_snapshot")
-    return calls, f"ok source=valuation_snapshot rows={len(rows_b)}/{len(expected)}"
+def _shares_row_from_snapshot(item):
+    stock = item.get("stock", {})
+    code = stock.get("code") or item.get("code")
+    close = item.get("close")
+    tmv, cmv = item.get("totalMv"), item.get("circMv")   # 万元
+    if not code or not close or close <= 0 or tmv is None:
+        return None
+    as_of = item.get("actualTradeDate")
+    if as_of and len(as_of) == 8:
+        as_of = f"{as_of[:4]}-{as_of[4:6]}-{as_of[6:]}"
+    return {
+        "code": code, "name": stock.get("name"),
+        "total_shares_yi": (tmv / 1e4) / close,
+        "circ_shares_yi": (cmv / 1e4) / close if cmv is not None else None,
+        "as_of_date": as_of,
+    }
+
+
+def refresh_shares(con, codes, quota):
+    """
+    20只/批调用 valuation_snapshot(取最新交易日)反推股本并 upsert。个别瞬时空值
+    (高频扫描时观测到)本轮跳过——它仍在 pick_codes_to_refresh 的"待刷新"队列里，
+    下一轮自然重试，不需要在本函数内部重试。
+    返回 (rows, calls_used)。
+    """
+    rows, calls = [], 0
+    for i in range(0, len(codes), 20):
+        if calls >= quota:
+            break
+        data = call_tool("valuation_snapshot", {
+            "codes": codes[i:i + 20], "detailLevel": "raw", "format": "json"})
+        calls += 1
+        for item in data.get("items", []):
+            r = _shares_row_from_snapshot(item)
+            if r:
+                rows.append(r)
+    if rows:
+        updated_codes = [r["code"] for r in rows]
+        now = datetime.now()
+        con.execute(
+            f"DELETE FROM shares_outstanding WHERE code IN ({','.join(['?'] * len(updated_codes))})",
+            updated_codes)
+        con.executemany(
+            "INSERT INTO shares_outstanding VALUES (?, ?, ?, ?, ?, ?)",
+            [[r["code"], r["name"], r["total_shares_yi"], r["circ_shares_yi"], r["as_of_date"], now]
+             for r in rows])
+    return rows, calls
 
 
 def main():
     if not KEY:
         raise SystemExit("WUDAO_API_KEY 未设置（环境变量或 ~/.env）。")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", help="抓指定交易日 YYYY-MM-DD")
-    ap.add_argument("--backfill", type=int, default=0,
-                    help="回填最近N个交易日中 valuation_daily 缺失的（新日期优先）")
-    ap.add_argument("--max-calls", type=int, default=1500, help="本次运行调用上限（配额护栏）")
+    ap.add_argument("--daily-quota", type=int, default=40,
+                    help="本次调用上限。默认40≈全市场一周滚动一轮(5523/20/7≈40)。")
+    ap.add_argument("--bootstrap", action="store_true",
+                    help="从已入库 valuation_daily 免费反推初始股本(零API调用)，仅需跑一次。")
     args = ap.parse_args()
 
     con = duckdb.connect(DB_PATH)
-    con.execute(DDL)
+    con.execute(DDL_SHARES)
 
-    if args.date:
-        dates = [args.date]
+    if args.bootstrap:
+        n = bootstrap_from_valuation_daily(con)
+        print(f"从 valuation_daily 免费反推股本 {n} 只（零API调用）。")
+
+    con.execute(DDL_VIEW)
+
+    codes = pick_codes_to_refresh(con, args.daily_quota)
+    if not codes:
+        print("无待刷新代码。")
     else:
-        n = max(args.backfill, 1)
-        # 待处理 = 缺失的交易日 + 质量不达标的交易日（覆盖<90% 或 市值空值>10%），
-        # 新日期优先。质量差的日期会被合并式写入逐次修复（自愈）。
-        dates = [r[0].isoformat() for r in con.execute(
-            """WITH recent AS (SELECT DISTINCT date FROM v_daily_qfq ORDER BY date DESC LIMIT ?),
-               kcnt AS (SELECT date, count(*) AS n FROM v_daily_qfq
-                        WHERE date IN (SELECT date FROM recent) GROUP BY date),
-               vq AS (SELECT trade_date, count(*) AS n,
-                             sum(CASE WHEN total_mv_yi IS NULL THEN 1 ELSE 0 END) AS null_n
-                      FROM valuation_daily GROUP BY trade_date)
-               SELECT k.date FROM kcnt k LEFT JOIN vq v ON v.trade_date = k.date
-               WHERE v.trade_date IS NULL
-                  OR v.n < 0.9 * k.n
-                  OR v.null_n > 0.1 * v.n
-               ORDER BY k.date DESC""", [n]).fetchall()]
-        if not dates:
-            print("最近", n, "个交易日均已入库且质量达标，无需抓取。")
+        rows, calls = refresh_shares(con, codes, args.daily_quota)
+        print(f"本轮刷新 {len(rows)}/{len(codes)} 只股本，用了 {calls} 次调用。")
 
-    used = 0
-    for d in dates:
-        if used >= args.max_calls:
-            print(f"配额护栏 {args.max_calls} 用尽，剩余日期下次续跑。")
-            break
-        calls, status = ingest_date(con, d, args.max_calls - used)
-        used += calls
-        print(f"{d}: {status} calls={calls} (累计 {used}/{args.max_calls})")
-
-    total = con.execute("SELECT count(DISTINCT trade_date), count(*) FROM valuation_daily").fetchone()
-    print(f"valuation_daily 现有 {total[0]} 个交易日 / {total[1]} 行。")
+    total = con.execute(
+        "SELECT count(*), min(as_of_date), max(as_of_date) FROM shares_outstanding").fetchone()
+    print(f"shares_outstanding 现有 {total[0]} 只，最旧锚点 {total[1]}，最新锚点 {total[2]}。")
     con.close()
 
 
