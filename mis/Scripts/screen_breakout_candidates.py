@@ -29,8 +29,10 @@ vcp_breakout 参数集里加 recent_gain_max_{3,5,10}d_pct 覆盖（见 analyze_
 需环境变量 WUDAO_API_KEY。
 """
 import os, json, requests, duckdb, sys
+from datetime import datetime
 
 SCREEN_RESULT_JSON = "/Users/tx/market-data/screen_result.json"
+SCREEN_RESULT_META = "/Users/tx/market-data/screen_result.meta.json"
 
 KEY = os.environ.get("WUDAO_API_KEY")
 MCP_URL = "https://stock.quicktiny.cn/api/mcp"
@@ -100,7 +102,14 @@ def write_screen_result_json(trade_date, candidates):
         })
     with open(SCREEN_RESULT_JSON, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"screen_result.json written: {len(out)} rows -> {SCREEN_RESULT_JSON}")
+    # 旁挂元数据：供下游读取方（20:00 MIS_Daily_Scan、08:50 盘前清单等）判断新鲜度，
+    # 防止把陈旧结果误当"当日有效"（2026-07-21 曾发生：18:12 链失败后 20:00 读到
+    # 上午 09:48 的旧文件仍报当日有效）。读取方应校验 data_date 是否为预期交易日。
+    with open(SCREEN_RESULT_META, "w", encoding="utf-8") as f:
+        json.dump({"data_date": trade_date, "candidates": len(out),
+                   "generated_at": datetime.now().isoformat(timespec="seconds")},
+                  f, ensure_ascii=False, indent=2)
+    print(f"screen_result.json written: {len(out)} rows -> {SCREEN_RESULT_JSON} (+meta)")
 
 
 def _cap_available(trade_date):

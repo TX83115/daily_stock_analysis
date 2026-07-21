@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 新增 mis/Scripts/score_news.py（P4b）：Kimi API 对 news_daily 电报结构化打分（importance/direction/板块/个股/催化类型）入 news_score_daily，批量+单条降级+审核拒绝隔离，按 content_hash 幂等。
+- [新功能] 新增 mis/Scripts/intraday_brief.py（P6）：盘中简报（宽度/涨跌停/天气变化/强题材/focus逐票）与 5 分钟级条件警报（focus炸板/大跌/触跌停、封板率骤降；只触发才推送）双模式；个股行情走腾讯免费接口、市场结构走悟道，快照状态对比存 intraday_state.json。
+- [新功能] 新增 mis/Scripts/feishu_push.py：飞书群 webhook 推送助手（读 .env FEISHU_WEBHOOK_URL，失败不阻断上游）。
+- [改进] mis/Scripts/screen_breakout_candidates.py 产出旁挂 screen_result.meta.json（data_date/candidates/generated_at），供下游读取方校验新鲜度，防止陈旧结果被误当当日有效。
 - [新功能] 新增 mis/Scripts/fetch_cls_news.py：悟道 cls_news（财联社电报）采集入库 news_daily 表（P4 消息面数据底座），只入 A/B 级、按 content md5 去重累积、默认覆盖隔夜18小时；服务盘前晨报与战法 §13 消息强度/§17 主催化的自动预填。
 - [修复] MIS 龙头筛选（mis/Scripts/screen_dragon_candidates.py）取数日错位：原将炸板数据日设为上一交易日、落库日设为最新交易日，导致"昨日炸板→今日弱转强"实际取到上上个交易日的炸板池；现对齐 breakout 口径，炸板/题材/竞价阈值/落库 trade_date 统一用最新已收盘交易日，须在日K同步后运行。同时将硬编码参数迁入 strategy_parameters(dragon_weak_to_strong)。
 - [新功能] 新增 mis/Scripts/verify_auction_candidates.py 入版本管理（收窄 .gitignore 的 verify_*.py 规则为仅忽略根目录）：9:25 集合竞价三因子验证（竞价量/开盘价位/持续性）读取 focus_list_daily 最新筛选批次，修复原 date.today() 取数日语义（筛选写的是数据日，日历当日永远查不到候选）。
