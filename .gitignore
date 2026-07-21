@@ -75,7 +75,9 @@ local/
 
 run.sh
 
-verify_*.py
+# 只忽略仓库根目录的临时验证脚本；子目录下的正式脚本（如
+# mis/Scripts/verify_auction_candidates.py）需要入库
+/verify_*.py
 
 # ignore Claude workspace artifacts, but keep shared repo skills versioned
 .claude/*

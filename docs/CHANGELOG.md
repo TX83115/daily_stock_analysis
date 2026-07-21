@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] MIS 龙头筛选（mis/Scripts/screen_dragon_candidates.py）取数日错位：原将炸板数据日设为上一交易日、落库日设为最新交易日，导致"昨日炸板→今日弱转强"实际取到上上个交易日的炸板池；现对齐 breakout 口径，炸板/题材/竞价阈值/落库 trade_date 统一用最新已收盘交易日，须在日K同步后运行。同时将硬编码参数迁入 strategy_parameters(dragon_weak_to_strong)。
+- [新功能] 新增 mis/Scripts/verify_auction_candidates.py 入版本管理（收窄 .gitignore 的 verify_*.py 规则为仅忽略根目录）：9:25 集合竞价三因子验证（竞价量/开盘价位/持续性）读取 focus_list_daily 最新筛选批次，修复原 date.today() 取数日语义（筛选写的是数据日，日历当日永远查不到候选）。
 - [改进] MIS 突破筛选（mis/Scripts/screen_breakout_candidates.py）合并原本地 SQL 版 daily_screen.py 成为唯一 VCP 实现：新增 688/北交所硬排除、可调的近期涨幅过热闸门（默认 3日<10%/5日<20%/10日<30%，可经 strategy_parameters 覆盖）、逐步淘汰漏斗诊断输出，并兼容产出 screen_result.json。
 - [改进] mis/Scripts/fetch_valuation_daily.py 由"每日全市场估值快照"改为"股本锚点+本地重构市值"（v2）：新增 shares_outstanding 股本表 + v_market_cap 视图（本地收盘价 x 股本，任意历史日零API成本查市值），股本一周滚动刷新一次（约40次调用/天，此前每日约1200次），冷启动可从已入库 valuation_daily 免费反推股本；突破筛选市值过滤优先用真实入库快照、次选重构视图、最后兜底悟道实时接口。
 - [修复] MIS 日线扫描（mis/Scripts/mis_daily.py）Layer 1 全市场数据改用新浪为主源、东财降为回退，并忽略 macOS 系统级代理直连国内数据源，消除每次运行必现的东财 ProxyError/断连重试。
