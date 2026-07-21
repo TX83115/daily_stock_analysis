@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 新增 mis/Scripts/fetch_cls_news.py：悟道 cls_news（财联社电报）采集入库 news_daily 表（P4 消息面数据底座），只入 A/B 级、按 content md5 去重累积、默认覆盖隔夜18小时；服务盘前晨报与战法 §13 消息强度/§17 主催化的自动预填。
 - [修复] MIS 龙头筛选（mis/Scripts/screen_dragon_candidates.py）取数日错位：原将炸板数据日设为上一交易日、落库日设为最新交易日，导致"昨日炸板→今日弱转强"实际取到上上个交易日的炸板池；现对齐 breakout 口径，炸板/题材/竞价阈值/落库 trade_date 统一用最新已收盘交易日，须在日K同步后运行。同时将硬编码参数迁入 strategy_parameters(dragon_weak_to_strong)。
 - [新功能] 新增 mis/Scripts/verify_auction_candidates.py 入版本管理（收窄 .gitignore 的 verify_*.py 规则为仅忽略根目录）：9:25 集合竞价三因子验证（竞价量/开盘价位/持续性）读取 focus_list_daily 最新筛选批次，修复原 date.today() 取数日语义（筛选写的是数据日，日历当日永远查不到候选）。
 - [改进] MIS 突破筛选（mis/Scripts/screen_breakout_candidates.py）合并原本地 SQL 版 daily_screen.py 成为唯一 VCP 实现：新增 688/北交所硬排除、可调的近期涨幅过热闸门（默认 3日<10%/5日<20%/10日<30%，可经 strategy_parameters 覆盖）、逐步淘汰漏斗诊断输出，并兼容产出 screen_result.json。
