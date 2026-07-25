@@ -75,7 +75,7 @@ def verify_candidate(code, name, path, threshold, auction_row):
         return {
             "code": code, "name": name, "path": path,
             "factor1": None, "factor2": None, "factor3": None,
-            "all_pass": False, "note": "no auction data found for this code today"
+            "all_pass": False, "note": "今日未查到该股竞价数据"
         }
 
     bid_vol_hands = auction_row.get("bidVolHands")
