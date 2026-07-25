@@ -172,19 +172,25 @@ def _cap_by_code_local(trade_date, market_cap_type):
     该日未入库则用 v_market_cap 视图（股本锚点 x 该日本地收盘价重构，
     实测跨7个交易日 94.9%~98.4% 误差<0.1%）。两者都没有才返回空 dict
     （调用方回退悟道实时接口）。
+
+    返回 (caps, source)：source 记录实际使用的数据源，供日志如实标注——
+    "valuation_daily"（当日真实入库快照）/ "v_market_cap"（股本锚点重构）
+    / None（本地无该日市值数据，调用方回退实时接口）。
     """
     col = "circ_mv_yi" if market_cap_type == "circ" else "total_mv_yi"
     con = duckdb.connect(DB_PATH, read_only=True)
     rows = con.execute(
         f"SELECT code, {col} FROM valuation_daily WHERE trade_date = ?", [trade_date]).fetchall()
     caps = {r[0]: r[1] for r in rows if r[1] is not None}
+    source = "valuation_daily"
     if not caps:
         vcol = "circ_mv_yi" if market_cap_type == "circ" else "total_mv_yi"
         rows = con.execute(
             f"SELECT code, {vcol} FROM v_market_cap WHERE trade_date = ?", [trade_date]).fetchall()
         caps = {r[0]: r[1] for r in rows if r[1] is not None}
+        source = "v_market_cap" if caps else None
     con.close()
-    return caps
+    return caps, source
 
 
 def run_screener(params, trade_date):
@@ -211,7 +217,7 @@ def run_screener(params, trade_date):
     # P1 本地优先：valuation_daily 已有该日快照 -> 技术过滤后直接本地过市值。
     # 本地缺市值的个别代码（快照瞬时缺失/新股）用 valuation_snapshot 小批量补齐，
     # 不静默排除。
-    local_caps = _cap_by_code_local(trade_date, params["market_cap_type"])
+    local_caps, cap_source = _cap_by_code_local(trade_date, params["market_cap_type"])
     if local_caps:
         tech_rows = call_tool("stock_screener", tech_args).get("rows", [])
         missing = [r["code"] for r in tech_rows if r["code"] not in local_caps]
@@ -226,11 +232,11 @@ def run_screener(params, trade_date):
                     v = item.get(key)
                     if c and v is not None:
                         local_caps[c] = v / 1e4
-            print(f"市值过滤: 本地缺 {len(missing)} 只，已实时补查")
+            print(f"市值过滤: 本地缺 {len(missing)} 只，已用悟道 valuation_snapshot 实时补查")
         lo, hi = params["market_cap_min_yi"], params["market_cap_max_yi"]
         filtered = [r for r in tech_rows
                     if r["code"] in local_caps and lo <= local_caps[r["code"]] <= hi]
-        print(f"市值过滤: 本地 valuation_daily({trade_date})；"
+        print(f"市值过滤: 本地 {cap_source}({trade_date})；"
               f"技术候选={len(tech_rows)} -> 市值通过={len(filtered)}")
         return filtered
 
