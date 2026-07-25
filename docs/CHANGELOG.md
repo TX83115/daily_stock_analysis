@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] #1595 P1 新增 prompt cache telemetry / analysis-path hints / diagnostics 最小配置，默认不改变 provider 请求 shape，并复用 LLM usage HMAC secret 做 domain-separated cache hint 派生。
 - [改进] 将 Docker Compose 默认内存建议从 512M 提升到 1G，并补充低配部署说明。
 - [改进] 每日分析 workflow 兼容误将 `STOCK_LIST` 配到同名 Environment variables 的场景，同时保留 Repository variables 作为推荐配置入口。
+- [修复] MIS 突破筛选（mis/Scripts/screen_breakout_candidates.py）市值过滤日志标签改为按实际数据源动态输出（valuation_daily 真值快照 / v_market_cap 股本锚点重构 / 悟道 valuation_snapshot 实时补查），消除原硬编码"本地 valuation_daily"标签在回退路径下的误导。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
@@ -53,8 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 修复 Web 回测运行未传分析日期范围、股票代码未归一化导致后端成功返回但结果为空的问题，并为空候选和行情不足返回诊断信息。
 - [文档] 补充回测请求链路说明：`analysis_date_from/analysis_date_to` 与 `code` 的输入边界、归一化与筛选顺序，以及历史行情不足或候选集为空时回测返回成功响应，在 `message` 与 `diagnostics`（含 `empty_reason`）中提供可诊断信息，并同步更新 `docs/full-guide.md`、`docs/full-guide_EN.md` 示例。
 - [修复] 回测代码匹配新增非法市场后缀/长度兜底：如 `600519.HK`、`600519.SZ`、`SH000001` 不再静默回落到其它有效代码，并在日期筛选重跑时对齐旧回测结果的分析日期，避免历史快照日期命中但结果列表仍为空。
-
-## [3.23.0] - 2026-06-20
+- [新功能] 新增 mis/Scripts/r2_sync.py（MIS 晚间重链上云 P10-S1/S3）：S3 兼容对象存储通用工具（boto3 + 自定义 endpoint_url，不绑死 Cloudflare SDK，region 可经 R2_REGION 覆盖以便换供应商），提供 DuckDB 的 download/upload/validate、按数据 trade_date 命名的历史快照保留 N 份 + latest 指针，以及晚间链的 R2 状态标记子命令（trade-date/state-get/state-put/state-del/prune）。上传含大小回读与 latest 指针回读断言；validate 校验 v_daily_qfq/raw_kline_daily/strategy_parameters 活跃参数，并可用 --min-trade-date 拦截「DB 数据日回退」。
+- [新功能] 新增 mis/Scripts/export_snapshot.py 入版本管理：导出 focus_list_daily/strategy_parameters/daily_recap/sentiment_daily 为 parquet 快照 + manifest.json，供云端早间三件套消费（此前仅存在于本地未入库，云端 checkout 取不到）。
+- [改进] MIS 晚间重链（18:12）新增云端并行实现（私仓 mis-runtime 的 GitHub Actions night-chain workflow，用 R2 作 DuckDB 持久层）：Mac 本地 daily_update.sh + watchdog + launchd 保留为离线独立冗余副本且不写 R2；云端以 R2 上的「今日已成功」标记复刻 watchdog 的补跑角色，标记未置位时不重跑筛选以免破坏当日候选。
 
 ### 发布亮点
 
