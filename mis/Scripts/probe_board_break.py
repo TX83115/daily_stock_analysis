@@ -3,7 +3,10 @@ import json
 import sys
 
 WUDAO_URL = "https://stock.quicktiny.cn/api/mcp"
-API_KEY = "lb_95edefd519bcfd361b1d008c205f07ff13488e696aa85914433ee589c695679c"
+import os
+from dotenv import load_dotenv
+load_dotenv()
+API_KEY = os.environ.get("WUDAO_API_KEY", "")
 
 def call_tool(tool_name, arguments):
     resp = requests.post(
