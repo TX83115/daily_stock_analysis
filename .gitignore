@@ -75,8 +75,9 @@ local/
 
 run.sh
 
-# 只忽略仓库根目录的临时验证脚本；子目录下的正式脚本（如
-# mis/Scripts/verify_auction_candidates.py）需要入库
+# 只忽略仓库根目录的临时验证脚本（子目录下的正式脚本不受影响）。
+# 注：MIS 相关脚本已于 2026-07-27 整体迁至私有仓 TX83115/mis-runtime 的 mis/ 下，
+# 本仓不再包含 MIS 战法与筛选代码。
 /verify_*.py
 
 # ignore Claude workspace artifacts, but keep shared repo skills versioned

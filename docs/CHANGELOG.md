@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 回测代码匹配新增非法市场后缀/长度兜底：如 `600519.HK`、`600519.SZ`、`SH000001` 不再静默回落到其它有效代码，并在日期筛选重跑时对齐旧回测结果的分析日期，避免历史快照日期命中但结果列表仍为空。
 - [新功能] 新增 mis/Scripts/r2_sync.py（MIS 晚间重链上云 P10-S1/S3）：S3 兼容对象存储通用工具（boto3 + 自定义 endpoint_url，不绑死 Cloudflare SDK，region 可经 R2_REGION 覆盖以便换供应商），提供 DuckDB 的 download/upload/validate、按数据 trade_date 命名的历史快照保留 N 份 + latest 指针，以及晚间链的 R2 状态标记子命令（trade-date/state-get/state-put/state-del/prune）。上传含大小回读与 latest 指针回读断言；validate 校验 v_daily_qfq/raw_kline_daily/strategy_parameters 活跃参数，并可用 --min-trade-date 拦截「DB 数据日回退」。
 - [新功能] 新增 mis/Scripts/export_snapshot.py 入版本管理：导出 focus_list_daily/strategy_parameters/daily_recap/sentiment_daily 为 parquet 快照 + manifest.json，供云端早间三件套消费（此前仅存在于本地未入库，云端 checkout 取不到）。
+- [chore] MIS 相关代码整体迁出本仓：`mis/`（战法蓝图 MIS_Blueprint.md + 全部采集/筛选/回测脚本，26 个跟踪文件）已迁至私有仓 `TX83115/mis-runtime` 的 `mis/` 下。原因：本仓是公开 fork，GitHub 不支持 fork 转私有，战法与筛选逻辑留在此处等于对外公开；迁移后战法与其产出数据同在一个私有边界内。同时删除已否决的 `mis-cloud/`（Cloudflare Workers+D1 方案，见迁移记录）与调试产物。注意：已公开过的内容仍存在于本仓 git 历史中，本次有意不重写历史。
 - [改进] MIS 晚间重链（18:12）新增云端并行实现（私仓 mis-runtime 的 GitHub Actions night-chain workflow，用 R2 作 DuckDB 持久层）：Mac 本地 daily_update.sh + watchdog + launchd 保留为离线独立冗余副本且不写 R2；云端以 R2 上的「今日已成功」标记复刻 watchdog 的补跑角色，标记未置位时不重跑筛选以免破坏当日候选。
 
 ### 发布亮点
