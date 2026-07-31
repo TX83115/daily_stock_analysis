@@ -170,13 +170,11 @@ gh run view <run_id> --log-failed
 
 - Web 前端改动：
   - 适用范围：`apps/dsa-web/`
-  - 默认执行：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
-  - 若涉及 API 联调、路由、状态管理、Markdown/图表渲染或认证状态，交付说明中要明确说明联动面和未覆盖风险。
+  - 具体验证步骤见 `apps/dsa-web/CLAUDE.md`。
 
 - 桌面端改动：
   - 适用范围：`apps/dsa-desktop/`、`scripts/run-desktop.ps1`、`scripts/build-desktop*.ps1`、`scripts/build-*.sh`、`docs/desktop-package.md`
-  - 默认执行：先构建 Web，再构建桌面端
-  - 如受平台限制未能完整验证，需要明确说明是否验证了 Web 构建产物、Electron 构建以及 Release 工作流影响。
+  - 具体验证步骤见 `apps/dsa-desktop/CLAUDE.md`。
 
 - API / Schema / 认证联动改动：
   - 适用范围：`api/**`、`src/schemas/**`、`src/services/**`、`apps/dsa-web/**`、`apps/dsa-desktop/**`
